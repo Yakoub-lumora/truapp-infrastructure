@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  worker:
+    build:
+      context: ../../
+      dockerfile: docker/worker/Dockerfile
+      args:
+        - NODE_ENV=production
+    container_name: trueshot-worker-prod
+    restart: unless-stopped
+
+    # Resource limits and deployment config
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+    # Environment
+    env_file:
+      - ../../.env.production
+    environment:
+      - NODE_ENV=production
+      - WORKER_CONCURRENCY=3
+      - REDIS_MAXRETRIES=5
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:exec,nodev,nosuid,size=200M
+      - /app/logs:exec,nodev,nosuid,size=100M
+      - /home/worker/.npm:exec,nodev,nosuid,size=50M
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "npx", "tsx", "lib/queue/worker-service.ts", "health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+    # Labels for monitoring
+    labels:
+      - "com.trueshot.service=worker"
+      - "com.trueshot.environment=production"
+      - "com.trueshot.scaling=queue-based"
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1450
