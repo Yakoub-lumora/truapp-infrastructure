@@ -1,0 +1,203 @@
+name: EC2 Deployment (CodeDeploy)
+
+on:
+  push:
+    branches:
+      - dev   # Auto-deploy to dev environment
+      - main  # Deploy to prod (requires manual approval in GitHub Environment settings)
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  NODE_VERSION: '20.10.0'
+  AWS_REGION: 'us-east-1'
+
+jobs:
+  deploy-ec2:
+    name: Deploy to ${{ (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev') && 'Dev' || 'Prod' }}
+    runs-on: ubuntu-latest
+    environment: ${{ (github.ref == 'refs/heads/dev' || github.event.inputs.environment == 'dev') && 'dev-ec2' || 'production-ec2' }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Determine environment
+        id: determine-env
+        run: |
+          # Manual trigger takes precedence
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+            echo "Using manual input: $ENV"
+          else
+            # Automatic trigger - determine from branch
+            if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+              ENV="dev"
+            elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+              ENV="prod"
+            else
+              echo "Error: Unknown branch ${{ github.ref }}"
+              exit 1
+            fi
+            echo "Determined from branch: $ENV"
+          fi
+
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+
+          # Set environment-specific variables
+          if [[ "$ENV" == "dev" ]]; then
+            echo "S3_BUCKET=trushot-dev-deployments" >> $GITHUB_OUTPUT
+            echo "CODEDEPLOY_APP=trushot-dev" >> $GITHUB_OUTPUT
+            echo "CODEDEPLOY_GROUP=trushot-dev-deployment-group" >> $GITHUB_OUTPUT
+          else
+            echo "S3_BUCKET=trushot-prod-deployments" >> $GITHUB_OUTPUT
+            echo "CODEDEPLOY_APP=trushot-prod" >> $GITHUB_OUTPUT
+            echo "CODEDEPLOY_GROUP=trushot-prod-deployment-group" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run quality checks in parallel
+        run: |
+          echo "Running type-check and lint in parallel..."
+          npm run type-check & TYPE_CHECK_PID=$!
+          npm run lint & LINT_PID=$!
+
+          # Wait for both to complete
+          TYPE_CHECK_EXIT=0
+          LINT_EXIT=0
+
+          wait $TYPE_CHECK_PID || TYPE_CHECK_EXIT=$?
+          wait $LINT_PID || LINT_EXIT=$?
+
+          # Check results
+          if [ $TYPE_CHECK_EXIT -ne 0 ]; then
+            echo "❌ Type check failed"
+            exit 1
+          fi
+
+          if [ $LINT_EXIT -ne 0 ]; then
+            echo "❌ Lint failed"
+            exit 1
+          fi
+
+          echo "✅ All quality checks passed"
+
+      - name: Build Next.js application
+        env:
+          NODE_ENV: production
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          NEXT_TELEMETRY_DISABLED: ${{ vars.NEXT_TELEMETRY_DISABLED }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+          NEXT_PUBLIC_POSTHOG_KEY: ${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST: ${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
+          NEXT_PUBLIC_APP_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
+          STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
+        run: npm run build
+
+      - name: Create deployment package
+        run: |
+          chmod +x github/scripts/package.sh
+          bash github/scripts/package.sh
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload deployment package to S3
+        run: |
+          aws s3 cp deployment-${GITHUB_SHA::8}.tar.gz \
+            s3://${{ steps.determine-env.outputs.S3_BUCKET }}/deployments/deployment-${GITHUB_SHA::8}.tar.gz \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy via CodeDeploy
+        env:
+          CODEDEPLOY_APP: ${{ steps.determine-env.outputs.CODEDEPLOY_APP }}
+          CODEDEPLOY_GROUP: ${{ steps.determine-env.outputs.CODEDEPLOY_GROUP }}
+          S3_BUCKET: ${{ steps.determine-env.outputs.S3_BUCKET }}
+        run: |
+          chmod +x github/scripts/deploy-codedeploy.sh
+          bash github/scripts/deploy-codedeploy.sh
+
+      - name: Cleanup old deployments from S3
+        if: success()
+        run: |
+          echo "Checking for safe cleanup..."
+
+          # Get all currently active/in-progress deployments
+          ACTIVE_DEPLOYS=$(aws deploy list-deployments \
+            --application-name ${{ steps.determine-env.outputs.CODEDEPLOY_APP }} \
+            --deployment-group-name ${{ steps.determine-env.outputs.CODEDEPLOY_GROUP }} \
+            --include-only-statuses Created Queued InProgress \
+            --region ${{ env.AWS_REGION }} \
+            --query 'deployments' \
+            --output text || echo "")
+
+          # Get S3 keys from active deployments to protect them
+          PROTECTED_FILES=""
+          for DEPLOY_ID in $ACTIVE_DEPLOYS; do
+            S3_KEY=$(aws deploy get-deployment \
+              --deployment-id $DEPLOY_ID \
+              --region ${{ env.AWS_REGION }} \
+              --query 'deploymentInfo.revision.s3Location.key' \
+              --output text 2>/dev/null || echo "")
+            if [ -n "$S3_KEY" ]; then
+              PROTECTED_FILES="$PROTECTED_FILES $(basename $S3_KEY)"
+            fi
+          done
+
+          echo "Protected files in use: ${PROTECTED_FILES:-none}"
+
+          # Keep only last 10 deployment packages (excluding protected ones)
+          aws s3 ls s3://${{ steps.determine-env.outputs.S3_BUCKET }}/deployments/ \
+            --region ${{ env.AWS_REGION }} \
+            | sort -r \
+            | tail -n +11 \
+            | awk '{print $4}' \
+            | while read FILE; do
+                if [ -n "$PROTECTED_FILES" ] && echo "$PROTECTED_FILES" | grep -q "$FILE"; then
+                  echo "Skipping (in use): $FILE"
+                else
+                  echo "Deleting: $FILE"
+                  aws s3 rm "s3://${{ steps.determine-env.outputs.S3_BUCKET }}/deployments/$FILE" --region ${{ env.AWS_REGION }} || true
+                fi
+              done
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "### ✅ CodeDeploy Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.determine-env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Application:** ${{ steps.determine-env.outputs.CODEDEPLOY_APP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment Group:** ${{ steps.determine-env.outputs.CODEDEPLOY_GROUP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment method:** AWS CodeDeploy" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Zero-downtime deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Automatic rollback on failure" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Traffic control via ALB" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Health checks validation" >> $GITHUB_STEP_SUMMARY
