@@ -1,0 +1,397 @@
+name: ECS Worker Deployment
+
+on:
+  push:
+    branches:
+      - dev           # Auto-deploy to dev environment
+      - main-worker   # Deploy to prod (requires manual approval in GitHub Environment settings)
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  AWS_REGION: us-east-1
+  DOCKERFILE_PATH: ./docker/worker/Dockerfile
+
+jobs:
+  build:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write      # Required for OIDC authentication
+      contents: read       # Required for checkout
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+      environment: ${{ steps.determine-env.outputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: determine-env
+        run: |
+          # Manual trigger takes precedence over branch
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+            echo "Using manual input: $ENV"
+          else
+            # Automatic trigger - determine from branch
+            if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+              ENV="dev"
+            elif [[ "${{ github.ref }}" == "refs/heads/main-worker" ]]; then
+              ENV="prod"
+            else
+              echo "Error: Unknown branch ${{ github.ref }}"
+              exit 1
+            fi
+            echo "Determined from branch: $ENV"
+          fi
+
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "ECR_REPOSITORY=trushot-${ENV}-workers" >> $GITHUB_ENV
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build Docker image
+          docker build \
+            -f ${{ env.DOCKERFILE_PATH }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.determine-env.outputs.environment }}-latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:build-${{ github.run_number }} \
+            .
+
+          # Push all tags
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ steps.determine-env.outputs.environment }}-latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:build-${{ github.run_number }}
+
+          # Output for next jobs
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Summary
+        run: |
+          echo "### Docker Image Built Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.determine-env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.determine-env.outputs.environment }}-latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`build-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to ${{ needs.build.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: build
+    environment: ${{ needs.build.outputs.environment }}
+    permissions:
+      id-token: write      # Required for OIDC authentication
+      contents: read       # Required for checkout
+
+    steps:
+      - name: Set environment-specific variables
+        id: env-config
+        run: |
+          if [[ "${{ needs.build.outputs.environment }}" == "dev" ]]; then
+            echo "CLUSTER=trushot-dev-workers" >> $GITHUB_OUTPUT
+            echo "SERVICE=trushot-dev-workers" >> $GITHUB_OUTPUT
+            echo "FAMILY=trushot-dev-workers" >> $GITHUB_OUTPUT
+            echo "LOG_GROUP=/ecs/trushot-dev-workers" >> $GITHUB_OUTPUT
+          else
+            echo "CLUSTER=trushot-prod-workers" >> $GITHUB_OUTPUT
+            echo "SERVICE=trushot-prod-workers" >> $GITHUB_OUTPUT
+            echo "FAMILY=trushot-prod-workers" >> $GITHUB_OUTPUT
+            echo "LOG_GROUP=/ecs/trushot-prod-workers" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get current task definition from ECS
+        id: current-task-def
+        run: |
+          # Fetch the current active task definition
+          aws ecs describe-task-definition \
+            --task-definition ${{ steps.env-config.outputs.FAMILY }} \
+            --query 'taskDefinition' > current-task-def.json
+
+          # Extract CPU and memory (managed by Terraform)
+          CPU=$(jq -r '.cpu' current-task-def.json)
+          MEMORY=$(jq -r '.memory' current-task-def.json)
+          EXECUTION_ROLE=$(jq -r '.executionRoleArn' current-task-def.json)
+          TASK_ROLE=$(jq -r '.taskRoleArn' current-task-def.json)
+
+          echo "CPU=$CPU" >> $GITHUB_OUTPUT
+          echo "MEMORY=$MEMORY" >> $GITHUB_OUTPUT
+          echo "EXECUTION_ROLE=$EXECUTION_ROLE" >> $GITHUB_OUTPUT
+          echo "TASK_ROLE=$TASK_ROLE" >> $GITHUB_OUTPUT
+
+          echo "Using CPU: $CPU, Memory: $MEMORY from existing task definition"
+
+      - name: Render ECS task definition
+        run: |
+          cat > task-definition.json <<EOF
+          {
+            "family": "${{ steps.env-config.outputs.FAMILY }}",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "${{ steps.current-task-def.outputs.CPU }}",
+            "memory": "${{ steps.current-task-def.outputs.MEMORY }}",
+            "executionRoleArn": "${{ steps.current-task-def.outputs.EXECUTION_ROLE }}",
+            "taskRoleArn": "${{ steps.current-task-def.outputs.TASK_ROLE }}",
+            "containerDefinitions": [
+              {
+                "name": "worker",
+                "image": "${{ needs.build.outputs.image }}",
+                "essential": true,
+                "environment": [
+                  {"name": "NODE_ENV", "value": "${{ vars.NODE_ENV }}"},
+                  {"name": "NEXT_TELEMETRY_DISABLED", "value": "${{ vars.NEXT_TELEMETRY_DISABLED }}"},
+                  {"name": "ENABLE_CONSOLE_LOGS", "value": "true"},
+                  {"name": "NEXT_PUBLIC_SUPABASE_URL", "value": "${{ vars.NEXT_PUBLIC_SUPABASE_URL }}"},
+                  {"name": "NEXT_PUBLIC_SUPABASE_ANON_KEY", "value": "${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"},
+                  {"name": "SUPABASE_SERVICE_ROLE_KEY", "value": "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"},
+                  {"name": "REDIS_URL", "value": "${{ secrets.REDIS_URL }}"},
+                  {"name": "UPSTASH_REDIS_HOST", "value": "${{ vars.UPSTASH_REDIS_HOST }}"},
+                  {"name": "UPSTASH_REDIS_PORT", "value": "${{ vars.UPSTASH_REDIS_PORT }}"},
+                  {"name": "UPSTASH_REDIS_PASSWORD", "value": "${{ secrets.UPSTASH_REDIS_PASSWORD }}"},
+                  {"name": "UPSTASH_REDIS_TLS", "value": "${{ vars.UPSTASH_REDIS_TLS }}"},
+                  {"name": "UPSTASH_REDIS_REST_URL", "value": "${{ vars.UPSTASH_REDIS_REST_URL }}"},
+                  {"name": "UPSTASH_REDIS_REST_TOKEN", "value": "${{ secrets.UPSTASH_REDIS_REST_TOKEN }}"},
+                  {"name": "REDIS_MAX_CONNECTIONS", "value": "${{ vars.REDIS_MAX_CONNECTIONS }}"},
+                  {"name": "REDIS_MIN_CONNECTIONS", "value": "${{ vars.REDIS_MIN_CONNECTIONS }}"},
+                  {"name": "REDIS_ACQUIRE_TIMEOUT", "value": "${{ vars.REDIS_ACQUIRE_TIMEOUT }}"},
+                  {"name": "REDIS_HEALTH_CHECK_INTERVAL", "value": "${{ vars.REDIS_HEALTH_CHECK_INTERVAL }}"},
+                  {"name": "R2_ACCOUNT_ID", "value": "${{ vars.R2_ACCOUNT_ID }}"},
+                  {"name": "R2_ACCESS_KEY_ID", "value": "${{ secrets.R2_ACCESS_KEY_ID }}"},
+                  {"name": "R2_SECRET_ACCESS_KEY", "value": "${{ secrets.R2_SECRET_ACCESS_KEY }}"},
+                  {"name": "R2_BUCKET_NAME", "value": "${{ vars.R2_BUCKET_NAME }}"},
+                  {"name": "R2_PUBLIC_URL", "value": "${{ vars.R2_PUBLIC_URL }}"},
+                  {"name": "GEMINI_API_KEY", "value": "${{ secrets.GEMINI_API_KEY }}"},
+                  {"name": "OPENROUTER_API_KEY", "value": "${{ secrets.OPENROUTER_API_KEY }}"},
+                  {"name": "IMAGE_GENERATION_MODEL", "value": "${{ vars.IMAGE_GENERATION_MODEL }}"},
+                  {"name": "IMAGE_GENERATION_MODEL_FREE", "value": "${{ vars.IMAGE_GENERATION_MODEL_FREE }}"},
+                  {"name": "ANALYZER_PRIMARY_MODEL", "value": "${{ vars.ANALYZER_PRIMARY_MODEL }}"},
+                  {"name": "ANALYZER_FALLBACK_MODEL", "value": "${{ vars.ANALYZER_FALLBACK_MODEL }}"},
+                  {"name": "OPTIMIZER_PRIMARY_MODEL", "value": "${{ vars.OPTIMIZER_PRIMARY_MODEL }}"},
+                  {"name": "OPTIMIZER_FALLBACK_MODEL", "value": "${{ vars.OPTIMIZER_FALLBACK_MODEL }}"},
+                  {"name": "STRIPE_SECRET_KEY", "value": "${{ secrets.STRIPE_SECRET_KEY }}"},
+                  {"name": "STRIPE_PUBLISHABLE_KEY", "value": "${{ vars.STRIPE_PUBLISHABLE_KEY }}"},
+                  {"name": "STRIPE_WEBHOOK_SECRET", "value": "${{ secrets.STRIPE_WEBHOOK_SECRET }}"},
+                  {"name": "NEXT_PUBLIC_TURNSTILE_SITE_KEY", "value": "${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}"},
+                  {"name": "TURNSTILE_SECRET_KEY", "value": "${{ secrets.TURNSTILE_SECRET_KEY }}"},
+                  {"name": "NEXT_PUBLIC_POSTHOG_KEY", "value": "${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}"},
+                  {"name": "NEXT_PUBLIC_POSTHOG_HOST", "value": "${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}"},
+                  {"name": "GENERATION_WORKER_CONCURRENCY", "value": "${{ vars.GENERATION_WORKER_CONCURRENCY }}"},
+                  {"name": "MIN_GENERATION_WORKER_CONCURRENCY", "value": "${{ vars.MIN_GENERATION_WORKER_CONCURRENCY }}"},
+                  {"name": "MAX_GENERATION_WORKER_CONCURRENCY", "value": "${{ vars.MAX_GENERATION_WORKER_CONCURRENCY }}"},
+                  {"name": "WORKER_MEMORY_THRESHOLD_MB", "value": "${{ vars.WORKER_MEMORY_THRESHOLD_MB }}"},
+                  {"name": "SERVICE_MEMORY_THRESHOLD_MB", "value": "${{ vars.SERVICE_MEMORY_THRESHOLD_MB }}"},
+                  {"name": "WORKER_MIN_SUCCESS_RATE", "value": "${{ vars.WORKER_MIN_SUCCESS_RATE }}"},
+                  {"name": "MEMORY_CHECK_INTERVAL_MS", "value": "${{ vars.MEMORY_CHECK_INTERVAL_MS }}"},
+                  {"name": "GENERATION_QUEUE_RATE_LIMIT_MAX", "value": "${{ vars.GENERATION_QUEUE_RATE_LIMIT_MAX }}"},
+                  {"name": "GENERATION_QUEUE_RATE_LIMIT_DURATION", "value": "${{ vars.GENERATION_QUEUE_RATE_LIMIT_DURATION }}"},
+                  {"name": "WORKER_RATE_LIMIT_MAX", "value": "${{ vars.WORKER_RATE_LIMIT_MAX }}"},
+                  {"name": "WORKER_RATE_LIMIT_DURATION", "value": "${{ vars.WORKER_RATE_LIMIT_DURATION }}"},
+                  {"name": "MAX_GENERATION_BATCH_SIZE", "value": "${{ vars.MAX_GENERATION_BATCH_SIZE }}"},
+                  {"name": "MIN_GENERATION_BATCH_SIZE", "value": "${{ vars.MIN_GENERATION_BATCH_SIZE }}"},
+                  {"name": "QUEUE_MAX_ACTIVE_GENERATION", "value": "${{ vars.QUEUE_MAX_ACTIVE_GENERATION }}"},
+                  {"name": "QUEUE_MAX_ACTIVE_NOTIFICATION", "value": "${{ vars.QUEUE_MAX_ACTIVE_NOTIFICATION }}"},
+                  {"name": "QUEUE_GENERATION_FAILURE_THRESHOLD", "value": "${{ vars.QUEUE_GENERATION_FAILURE_THRESHOLD }}"},
+                  {"name": "QUEUE_NOTIFICATION_FAILURE_THRESHOLD", "value": "${{ vars.QUEUE_NOTIFICATION_FAILURE_THRESHOLD }}"},
+                  {"name": "GENERATION_JOB_ATTEMPTS", "value": "${{ vars.GENERATION_JOB_ATTEMPTS }}"},
+                  {"name": "GENERATION_JOB_TIMEOUT", "value": "${{ vars.GENERATION_JOB_TIMEOUT }}"},
+                  {"name": "GENERATION_BACKOFF_DELAY", "value": "${{ vars.GENERATION_BACKOFF_DELAY }}"},
+                  {"name": "QUEUE_DEFAULT_ATTEMPTS", "value": "${{ vars.QUEUE_DEFAULT_ATTEMPTS }}"},
+                  {"name": "QUEUE_JOB_TIMEOUT", "value": "${{ vars.QUEUE_JOB_TIMEOUT }}"},
+                  {"name": "QUEUE_BACKOFF_DELAY", "value": "${{ vars.QUEUE_BACKOFF_DELAY }}"},
+                  {"name": "QUEUE_REMOVE_ON_COMPLETE", "value": "${{ vars.QUEUE_REMOVE_ON_COMPLETE }}"},
+                  {"name": "QUEUE_REMOVE_ON_FAIL", "value": "${{ vars.QUEUE_REMOVE_ON_FAIL }}"},
+                  {"name": "QUEUE_STALLED_INTERVAL", "value": "${{ vars.QUEUE_STALLED_INTERVAL }}"},
+                  {"name": "QUEUE_MAX_STALLED_COUNT", "value": "${{ vars.QUEUE_MAX_STALLED_COUNT }}"},
+                  {"name": "QUEUE_RETRY_PROCESS_DELAY", "value": "${{ vars.QUEUE_RETRY_PROCESS_DELAY }}"},
+                  {"name": "NOTIFICATION_PRIORITY", "value": "${{ vars.NOTIFICATION_PRIORITY }}"},
+                  {"name": "NOTIFICATION_DELAY", "value": "${{ vars.NOTIFICATION_DELAY }}"},
+                  {"name": "NOTIFICATION_ATTEMPTS", "value": "${{ vars.NOTIFICATION_ATTEMPTS }}"},
+                  {"name": "NOTIFICATION_TIMEOUT", "value": "${{ vars.NOTIFICATION_TIMEOUT }}"},
+                  {"name": "EMAIL_PROVIDER", "value": "${{ vars.EMAIL_PROVIDER }}"},
+                  {"name": "EMAIL_FROM", "value": "${{ vars.EMAIL_FROM }}"},
+                  {"name": "NEXT_PUBLIC_APP_URL", "value": "${{ vars.NEXT_PUBLIC_APP_URL }}"},
+                  {"name": "HEALTH_CHECK_INTERVAL", "value": "${{ vars.HEALTH_CHECK_INTERVAL }}"},
+                  {"name": "ENABLE_RUSH_GENERATION", "value": "${{ vars.ENABLE_RUSH_GENERATION }}"},
+                  {"name": "ENABLE_APPLE_AUTH", "value": "${{ vars.ENABLE_APPLE_AUTH }}"},
+                  {"name": "ENABLE_REFERRAL_PROGRAM", "value": "${{ vars.ENABLE_REFERRAL_PROGRAM }}"},
+                  {"name": "API_RESPONSE_CACHE_TTL_HOURS", "value": "${{ vars.API_RESPONSE_CACHE_TTL_HOURS }}"}
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "${{ steps.env-config.outputs.LOG_GROUP }}",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "worker"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+
+      - name: Get previous task definition for rollback
+        id: previous-task-def
+        run: |
+          PREVIOUS_ARN=$(aws ecs describe-services \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --services ${{ steps.env-config.outputs.SERVICE }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "previous_task_arn=$PREVIOUS_ARN" >> $GITHUB_OUTPUT
+          echo "Previous task definition (for rollback): $PREVIOUS_ARN"
+
+      - name: Register ECS task definition
+        id: register-task-def
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "Registered task definition: $TASK_DEF_ARN"
+
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --service ${{ steps.env-config.outputs.SERVICE }} \
+            --task-definition ${{ steps.register-task-def.outputs.task_def_arn }} \
+            --force-new-deployment
+
+      - name: Wait for service stability
+        id: wait-stable
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          echo "Waiting for ECS service to stabilize (max 15 minutes)..."
+          aws ecs wait services-stable \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --services ${{ steps.env-config.outputs.SERVICE }}
+
+      - name: Verify deployment health
+        id: health-check
+        if: steps.wait-stable.outcome == 'success'
+        continue-on-error: true
+        run: |
+          echo "Checking task health status..."
+
+          # Get running tasks
+          TASK_ARNS=$(aws ecs list-tasks \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --service-name ${{ steps.env-config.outputs.SERVICE }} \
+            --desired-status RUNNING \
+            --query 'taskArns' \
+            --output text)
+
+          if [ -z "$TASK_ARNS" ]; then
+            echo "Error: No running tasks found"
+            exit 1
+          fi
+
+          # Check each task's health
+          for TASK_ARN in $TASK_ARNS; do
+            LAST_STATUS=$(aws ecs describe-tasks \
+              --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+              --tasks $TASK_ARN \
+              --query 'tasks[0].lastStatus' \
+              --output text)
+
+            echo "Task $(basename $TASK_ARN): $LAST_STATUS"
+
+            if [ "$LAST_STATUS" != "RUNNING" ]; then
+              echo "Error: Task is not in RUNNING state"
+              exit 1
+            fi
+          done
+
+          echo "All tasks are healthy!"
+
+      - name: Rollback on failure
+        if: steps.wait-stable.outcome == 'failure' || steps.health-check.outcome == 'failure'
+        run: |
+          echo "⚠️ Deployment failed. Rolling back to previous task definition..."
+          echo "Previous task definition: ${{ steps.previous-task-def.outputs.previous_task_arn }}"
+
+          aws ecs update-service \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --service ${{ steps.env-config.outputs.SERVICE }} \
+            --task-definition ${{ steps.previous-task-def.outputs.previous_task_arn }} \
+            --force-new-deployment
+
+          echo "Rollback initiated. Waiting for rollback to complete..."
+          aws ecs wait services-stable \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --services ${{ steps.env-config.outputs.SERVICE }}
+
+          echo "✅ Rollback completed successfully"
+          exit 1
+
+      - name: Check rollback success
+        if: failure()
+        run: |
+          echo "::error::Deployment failed and was rolled back to previous version"
+          exit 1
+
+      - name: Verify deployment
+        run: |
+          aws ecs describe-services \
+            --cluster ${{ steps.env-config.outputs.CLUSTER }} \
+            --services ${{ steps.env-config.outputs.SERVICE }} \
+            --query 'services[0].[serviceName,status,runningCount,desiredCount]' \
+            --output table
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "### ✅ Deployment to ${{ needs.build.outputs.environment }} Successful" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ steps.env-config.outputs.CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ steps.env-config.outputs.SERVICE }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Task Definition:** ${{ steps.register-task-def.outputs.task_def_arn }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ needs.build.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "::notice title=Deployment Successful::ECS worker deployed to ${{ needs.build.outputs.environment }} successfully"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "::error title=Deployment Failed::ECS worker deployment to ${{ needs.build.outputs.environment }} failed. Check logs for details."
