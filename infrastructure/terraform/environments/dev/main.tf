@@ -154,6 +154,37 @@ module "ecs_workers" {
   tags                        = var.tags
 }
 
+# Compute Module - Observability (Prometheus + Grafana)
+module "observability" {
+  source = "../../modules/compute/observability"
+
+  project_name                    = var.project_name
+  environment                     = var.environment
+  aws_region                      = var.aws_region
+  vpc_id                          = module.networking.vpc_id
+  private_subnet_ids              = module.networking.private_subnet_ids
+  ecs_cluster_id                  = module.ecs_workers.ecs_cluster_id
+  observability_alb_arn           = module.ec2.alb_arn
+  app_security_group_id           = module.security.ec2_app_security_group_id
+  worker_security_group_id        = module.security.ecs_workers_security_group_id
+  ecs_task_execution_role_arn     = module.security.ecs_task_execution_role_arn
+  ecs_task_role_arn               = module.security.ecs_task_role_arn
+  observability_allowed_cidr      = var.observability_allowed_cidr
+  prometheus_image                = var.prometheus_image
+  prometheus_cpu                  = var.prometheus_cpu
+  prometheus_memory               = var.prometheus_memory
+  prometheus_desired_count         = var.prometheus_desired_count
+  grafana_image                   = var.grafana_image
+  grafana_cpu                     = var.grafana_cpu
+  grafana_memory                  = var.grafana_memory
+  grafana_desired_count            = var.grafana_desired_count
+  grafana_admin_user              = var.grafana_admin_user
+  grafana_admin_password          = var.grafana_admin_password
+  grafana_allow_signup            = var.grafana_allow_signup
+  log_retention_days              = var.observability_log_retention_days
+  tags                            = var.tags
+}
+
 # Monitoring Module
 module "monitoring" {
   source = "../../modules/monitoring"

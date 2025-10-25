@@ -518,6 +518,86 @@ variable "cloudtrail_log_transition_days" {
   default     = 30 # Faster transition for dev
 }
 
+# Observability Variables (Prometheus + Grafana)
+variable "observability_allowed_cidr" {
+  description = "CIDR blocks allowed to access Prometheus and Grafana"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "prometheus_image" {
+  description = "Prometheus Docker image"
+  type        = string
+  default     = "prom/prometheus:latest"
+}
+
+variable "prometheus_cpu" {
+  description = "CPU units for Prometheus task"
+  type        = string
+  default     = "256"
+}
+
+variable "prometheus_memory" {
+  description = "Memory in MB for Prometheus task"
+  type        = string
+  default     = "512"
+}
+
+variable "prometheus_desired_count" {
+  description = "Desired number of Prometheus tasks"
+  type        = number
+  default     = 1
+}
+
+variable "grafana_image" {
+  description = "Grafana Docker image"
+  type        = string
+  default     = "grafana/grafana:latest"
+}
+
+variable "grafana_cpu" {
+  description = "CPU units for Grafana task"
+  type        = string
+  default     = "256"
+}
+
+variable "grafana_memory" {
+  description = "Memory in MB for Grafana task"
+  type        = string
+  default     = "512"
+}
+
+variable "grafana_desired_count" {
+  description = "Desired number of Grafana tasks"
+  type        = number
+  default     = 1
+}
+
+variable "grafana_admin_user" {
+  description = "Grafana admin username"
+  type        = string
+  default     = "admin"
+  sensitive   = true
+}
+
+variable "grafana_admin_password" {
+  description = "Grafana admin password"
+  type        = string
+  sensitive   = true
+}
+
+variable "grafana_allow_signup" {
+  description = "Allow user signup in Grafana"
+  type        = string
+  default     = "false"
+}
+
+variable "observability_log_retention_days" {
+  description = "CloudWatch log retention in days for observability services"
+  type        = number
+  default     = 7 # Shorter retention for dev
+}
+
 # CodeDeploy Variables
 variable "codedeploy_config_name" {
   description = "CodeDeploy deployment configuration"
