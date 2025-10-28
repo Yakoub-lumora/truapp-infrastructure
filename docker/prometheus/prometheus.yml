@@ -1,0 +1,89 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules once and periodically evaluate them
+rule_files: []
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets:
+          - "localhost:9090"
+
+  # TruShot Application Service
+  # Scrapes metrics from the Next.js application running on EC2 via ALB
+  # NOTE: Update the ALB DNS name to match your actual load balancer endpoint
+  - job_name: "app"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+          - "localhost:3000"  # Change to ALB DNS name in production
+    metrics_path: "/api/metrics"
+    scheme: "http"
+    # Relabel instance to be more descriptive
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "app-service"
+
+  # TruShot Worker Service
+  # Scrapes metrics from BullMQ workers running on ECS Fargate
+  # NOTE: Requires ECS service discovery setup or manual endpoint configuration
+  - job_name: "worker"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+          - "worker-service.local:9090"  # Configure with actual ECS service endpoint
+    metrics_path: "/metrics"
+    scheme: "http"
+    # Relabel instance to be more descriptive
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "worker-service"
+
+  # EC2 Node Exporter
+  # Scrapes system metrics from the EC2 instance(s)
+  - job_name: "node"
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+          - "localhost:9100"
+    metrics_path: "/metrics"
+    scheme: "http"
+
+  # RDS CloudWatch Metrics (via CloudWatch Exporter if available)
+  # Note: This requires CloudWatch Exporter to be running
+  # Commented out for now - can be enabled with additional exporter setup
+  # - job_name: "rds"
+  #   scrape_interval: 60s
+  #   scrape_timeout: 10s
+  #   static_configs:
+  #     - targets:
+  #         - "cloudwatch-exporter:9106"
+  #   metrics_path: "/metrics"
+  #   scheme: "http"
+
+  # Redis ElastiCache Metrics (via Redis Exporter if available)
+  # Note: This requires Redis Exporter to be running and accessible
+  # Commented out for now - can be enabled with additional exporter setup
+  # - job_name: "redis"
+  #   scrape_interval: 30s
+  #   scrape_timeout: 10s
+  #   static_configs:
+  #     - targets:
+  #         - "redis-exporter:9121"
+  #   metrics_path: "/metrics"
+  #   scheme: "http"
