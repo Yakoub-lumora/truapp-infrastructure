@@ -1,0 +1,7 @@
+# Deployment configuration - contains sensitive data
+.env
+.env.local
+.env.*.local
+
+# Docker build artifacts
+docker-compose.override.yml
