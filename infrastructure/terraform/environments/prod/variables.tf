@@ -518,17 +518,11 @@ variable "cloudtrail_log_transition_days" {
   default     = 90
 }
 
-# Observability Variables (Prometheus + Grafana)
+# Observability Variables (Infrastructure only)
 variable "observability_allowed_cidr" {
   description = "CIDR blocks allowed to access Prometheus and Grafana"
   type        = list(string)
   default     = ["0.0.0.0/0"]
-}
-
-variable "prometheus_image" {
-  description = "Prometheus Docker image"
-  type        = string
-  default     = "prom/prometheus:latest"
 }
 
 variable "prometheus_cpu" {
@@ -549,12 +543,6 @@ variable "prometheus_desired_count" {
   default     = 1
 }
 
-variable "grafana_image" {
-  description = "Grafana Docker image"
-  type        = string
-  default     = "grafana/grafana:latest"
-}
-
 variable "grafana_cpu" {
   description = "CPU units for Grafana task"
   type        = string
@@ -571,25 +559,6 @@ variable "grafana_desired_count" {
   description = "Desired number of Grafana tasks"
   type        = number
   default     = 1
-}
-
-variable "grafana_admin_user" {
-  description = "Grafana admin username"
-  type        = string
-  default     = "admin"
-  sensitive   = true
-}
-
-variable "grafana_admin_password" {
-  description = "Grafana admin password"
-  type        = string
-  sensitive   = true
-}
-
-variable "grafana_allow_signup" {
-  description = "Allow user signup in Grafana"
-  type        = string
-  default     = "false"
 }
 
 variable "observability_log_retention_days" {

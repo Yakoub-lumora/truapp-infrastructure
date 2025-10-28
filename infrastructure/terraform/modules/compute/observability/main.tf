@@ -230,7 +230,7 @@ resource "aws_ecs_task_definition" "prometheus" {
   container_definitions = jsonencode([
     {
       name      = "prometheus"
-      image     = var.prometheus_image
+      image     = "PROMETHEUS_IMAGE_PLACEHOLDER"
       essential = true
       portMappings = [
         {
@@ -293,27 +293,13 @@ resource "aws_ecs_task_definition" "grafana" {
   container_definitions = jsonencode([
     {
       name      = "grafana"
-      image     = var.grafana_image
+      image     = "GRAFANA_IMAGE_PLACEHOLDER"
       essential = true
       portMappings = [
         {
           containerPort = 3000
           hostPort      = 3000
           protocol      = "tcp"
-        }
-      ]
-      environment = [
-        {
-          name  = "GF_SECURITY_ADMIN_USER"
-          value = var.grafana_admin_user
-        },
-        {
-          name  = "GF_SECURITY_ADMIN_PASSWORD"
-          value = var.grafana_admin_password
-        },
-        {
-          name  = "GF_USERS_ALLOW_SIGN_UP"
-          value = var.grafana_allow_signup
         }
       ]
       logConfiguration = {

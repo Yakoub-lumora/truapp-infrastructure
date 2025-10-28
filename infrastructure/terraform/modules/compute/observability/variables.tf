@@ -68,14 +68,8 @@ variable "observability_allowed_cidr" {
 }
 
 # ========================================
-# Prometheus Configuration
+# Prometheus Infrastructure
 # ========================================
-
-variable "prometheus_image" {
-  description = "Prometheus Docker image"
-  type        = string
-  default     = "prom/prometheus:latest"
-}
 
 variable "prometheus_cpu" {
   description = "CPU units for Prometheus task"
@@ -95,27 +89,9 @@ variable "prometheus_desired_count" {
   default     = 1
 }
 
-variable "prometheus_retention_days" {
-  description = "Prometheus data retention in days"
-  type        = number
-  default     = 30
-}
-
-variable "prometheus_scrape_interval" {
-  description = "Prometheus scrape interval in seconds"
-  type        = number
-  default     = 15
-}
-
 # ========================================
-# Grafana Configuration
+# Grafana Infrastructure
 # ========================================
-
-variable "grafana_image" {
-  description = "Grafana Docker image"
-  type        = string
-  default     = "grafana/grafana:latest"
-}
 
 variable "grafana_cpu" {
   description = "CPU units for Grafana task"
@@ -133,25 +109,6 @@ variable "grafana_desired_count" {
   description = "Desired number of Grafana tasks"
   type        = number
   default     = 1
-}
-
-variable "grafana_admin_user" {
-  description = "Grafana admin username"
-  type        = string
-  default     = "admin"
-  sensitive   = true
-}
-
-variable "grafana_admin_password" {
-  description = "Grafana admin password"
-  type        = string
-  sensitive   = true
-}
-
-variable "grafana_allow_signup" {
-  description = "Allow user signup in Grafana"
-  type        = string
-  default     = "false"
 }
 
 # ========================================

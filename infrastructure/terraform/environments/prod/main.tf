@@ -170,17 +170,12 @@ module "observability" {
   ecs_task_execution_role_arn     = module.security.ecs_task_execution_role_arn
   ecs_task_role_arn               = module.security.ecs_task_role_arn
   observability_allowed_cidr      = var.observability_allowed_cidr
-  prometheus_image                = var.prometheus_image
   prometheus_cpu                  = var.prometheus_cpu
   prometheus_memory               = var.prometheus_memory
   prometheus_desired_count         = var.prometheus_desired_count
-  grafana_image                   = var.grafana_image
   grafana_cpu                     = var.grafana_cpu
   grafana_memory                  = var.grafana_memory
   grafana_desired_count            = var.grafana_desired_count
-  grafana_admin_user              = var.grafana_admin_user
-  grafana_admin_password          = var.grafana_admin_password
-  grafana_allow_signup            = var.grafana_allow_signup
   log_retention_days              = var.observability_log_retention_days
   tags                            = var.tags
 }
