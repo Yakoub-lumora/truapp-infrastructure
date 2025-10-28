@@ -29,7 +29,6 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy only worker-related source code
 COPY lib/queue/ ./lib/queue/
 COPY lib/services/ ./lib/services/
-COPY lib/gemini/ ./lib/gemini/
 COPY lib/supabase/server.ts ./lib/supabase/server.ts
 COPY lib/database.types.ts ./lib/database.types.ts
 COPY lib/env.ts ./lib/env.ts
