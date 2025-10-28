@@ -8,8 +8,8 @@ COPY provisioning/datasources/prometheus.json /etc/grafana/provisioning/datasour
 COPY provisioning/dashboards/dashboards.yml /etc/grafana/provisioning/dashboards/dashboards.yml
 COPY provisioning/dashboards/trushot-app-monitoring.json /etc/grafana/provisioning/dashboards/trushot-app-monitoring.json
 
-# Set proper permissions
-RUN chown -R grafana:grafana /etc/grafana/provisioning
+# Grafana runs as 'grafana' user by default in the base image
+# Provisioning directory permissions are handled by the base image
 
 # Expose Grafana port
 EXPOSE 3000
