@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  prometheus:
+    build:
+      context: ../prometheus
+      dockerfile: Dockerfile
+    image: ${PROMETHEUS_IMAGE}
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    environment:
+      - PROMETHEUS_RETENTION_DAYS=${PROMETHEUS_RETENTION_DAYS:-30}
+      - PROMETHEUS_SCRAPE_INTERVAL=${PROMETHEUS_SCRAPE_INTERVAL:-15}
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  grafana:
+    build:
+      context: ../grafana
+      dockerfile: Dockerfile
+    image: ${GRAFANA_IMAGE}
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=${GRAFANA_ALLOW_SIGNUP:-false}
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+    driver: local
+
+networks:
+  observability:
+    driver: bridge
