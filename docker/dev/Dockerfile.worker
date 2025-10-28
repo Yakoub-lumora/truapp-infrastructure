@@ -1,0 +1,25 @@
+FROM node:20.10.0-alpine AS base
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=dev --no-audit --no-fund
+
+FROM base AS worker
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json* tsconfig.json ./
+COPY lib/queue/ ./lib/queue/
+COPY lib/services/ ./lib/services/
+COPY lib/supabase/ ./lib/supabase/
+COPY lib/gemini/ ./lib/gemini/
+COPY lib/types/ ./lib/types/
+COPY lib/storage/ ./lib/storage/
+COPY lib/utils/ ./lib/utils/
+COPY lib/constants/ ./lib/constants/
+COPY lib/env.ts ./lib/
+
+ENV NODE_ENV=development
+
+CMD ["npx", "tsx", "lib/queue/worker-service.ts", "start"]

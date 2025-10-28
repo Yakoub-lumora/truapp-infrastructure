@@ -1,0 +1,38 @@
+services:
+  # Next.js Application
+  app:
+    build:
+      context: ../../
+      dockerfile: docker/dev/Dockerfile.app
+    container_name: trueshot-app-dev
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    stdin_open: true
+    tty: true
+
+  # Worker Service
+  worker:
+    build:
+      context: ../../
+      dockerfile: docker/dev/Dockerfile.worker
+    container_name: trueshot-worker-dev
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../lib:/app/lib
+      - ../../tsconfig.json:/app/tsconfig.json
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD", "npx", "tsx", "lib/queue/worker-service.ts", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
