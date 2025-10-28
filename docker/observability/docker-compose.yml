@@ -1,5 +1,11 @@
 version: '3.8'
 
+# Environment Configuration
+# The .env file is automatically loaded by docker-compose
+# All variables defined in .env are available to all services
+env_file:
+  - .env
+
 services:
   prometheus:
     build:
