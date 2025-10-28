@@ -3,7 +3,7 @@ version: '3.8'
 services:
   prometheus:
     build:
-      context: ../prometheus
+      context: ./prometheus
       dockerfile: Dockerfile
     image: ${PROMETHEUS_IMAGE}
     container_name: prometheus
@@ -26,7 +26,7 @@ services:
 
   grafana:
     build:
-      context: ../grafana
+      context: ./grafana
       dockerfile: Dockerfile
     image: ${GRAFANA_IMAGE}
     container_name: grafana
