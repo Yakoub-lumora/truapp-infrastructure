@@ -2,6 +2,8 @@
 
 Production-grade AWS infrastructure for a Trushot application with distributed job processing, observability, and automated deployments.
 
+**Portfolio by:** [Abdelillah Ait Yakoub](https://www.linkedin.com/in/abdelillah-ait-yakoub)
+
 ## What's In Here
 
 **Docker** — Development environments for the app, worker, and monitoring stack
