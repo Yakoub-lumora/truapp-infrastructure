@@ -12,7 +12,7 @@ Production-grade AWS infrastructure for a Trushot application with distributed j
 
 ```
 ┌─────────────────────────────────────────────┐
-│         User Traffic via CloudFront          │
+│         User Traffic via CloudFront         │
 └──────────────────┬──────────────────────────┘
                    │
         ┌──────────┴──────────┐
@@ -23,22 +23,21 @@ Production-grade AWS infrastructure for a Trushot application with distributed j
     └───┬────┘          └────────┘
         │
     ┌───▼────────────────────────────┐
-    │  EC2 Cluster (Auto Scaling)     │
-    │  └─ App (Next.js on port 3000)  │
+    │  EC2 Cluster (Auto Scaling)    │
+    │  └─ App ( on port 3000)        │
     └───┬────────────────────────────┘
         │
     ┌───┴──────┬──────────────────────┐
     │          │                      │
   ┌─▼──┐  ┌───▼──┐            ┌──────▼────┐
-  │ RDS│  │Redis │            │Cloudflare │
-  │(DB)│  │Queue │            │    R2     │
-  └────┘  └──────┘            │(Storage)  │
-                              └───────────┘
+  │ RDS│  │Redis │            │     S3    │
+  │(DB)│  │Queue │            │ (Storage) │
+  └────┘  └──────┘            └───────────┘
 
-    ┌────────────────────────────────┐
-    │  ECS Fargate (Worker Tasks)     │
-    │  └─ Worker (BullMQ processor)   │
-    └────────────────────────────────┘
+    ┌──────────────────────────────────────┐
+    │  ECS Fargate (Worker Tasks)          │
+    │  └─ Worker (Redis Queue processor)   │
+    └──────────────────────────────────────┘
 
 Monitoring: Prometheus scrapes metrics, Grafana visualizes them
 ```
