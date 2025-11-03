@@ -65,6 +65,3 @@ package-lock.json
 
 # IDE
 *.pem
-
-# Md files
-*.md
