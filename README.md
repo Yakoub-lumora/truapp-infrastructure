@@ -24,8 +24,7 @@ Production-grade AWS infrastructure for a Trushot application with distributed j
         │
     ┌───▼────────────────────────────┐
     │  EC2 Cluster (Auto Scaling)     │
-    │  ├─ App (Next.js on port 3000)  │
-    │  └─ Worker (BullMQ processor)   │
+    │  └─ App (Next.js on port 3000)  │
     └───┬────────────────────────────┘
         │
     ┌───┴──────┬──────────────────────┐
@@ -35,6 +34,11 @@ Production-grade AWS infrastructure for a Trushot application with distributed j
   │(DB)│  │Queue │            │    R2     │
   └────┘  └──────┘            │(Storage)  │
                               └───────────┘
+
+    ┌────────────────────────────────┐
+    │  ECS Fargate (Worker Tasks)     │
+    │  └─ Worker (BullMQ processor)   │
+    └────────────────────────────────┘
 
 Monitoring: Prometheus scrapes metrics, Grafana visualizes them
 ```
