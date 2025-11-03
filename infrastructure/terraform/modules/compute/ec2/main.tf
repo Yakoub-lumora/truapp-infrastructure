@@ -78,7 +78,7 @@ resource "aws_launch_template" "app" {
 
 # Application Load Balancer
 resource "aws_lb" "main" {
-  name_prefix        = "${substr(var.project_name, 0, 6)}-"
+  name_prefix        = "tru-"
   internal           = false
   load_balancer_type = "application"
   security_groups    = var.alb_security_group_ids
@@ -100,7 +100,7 @@ resource "aws_lb" "main" {
 
 # Target Group
 resource "aws_lb_target_group" "app" {
-  name_prefix = "${substr(var.project_name, 0, 6)}-"
+  name_prefix = "tru-"
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id

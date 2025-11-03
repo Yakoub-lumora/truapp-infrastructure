@@ -7,19 +7,26 @@ env_file:
   - .env
 
 services:
+  # Prometheus Monitoring
   prometheus:
     build:
       context: ./prometheus
       dockerfile: Dockerfile
-    image: ${PROMETHEUS_IMAGE}
+    image: ${PROMETHEUS_IMAGE:-prometheus:2.52.0}
     container_name: prometheus
+    restart: unless-stopped
     ports:
       - "9090:9090"
     volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
     environment:
       - PROMETHEUS_RETENTION_DAYS=${PROMETHEUS_RETENTION_DAYS:-30}
       - PROMETHEUS_SCRAPE_INTERVAL=${PROMETHEUS_SCRAPE_INTERVAL:-15}
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
     networks:
       - observability
     healthcheck:
@@ -28,20 +35,24 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    restart: unless-stopped
 
+  # Grafana Visualization
   grafana:
     build:
       context: ./grafana
       dockerfile: Dockerfile
-    image: ${GRAFANA_IMAGE}
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.2.2}
     container_name: grafana
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=${GRAFANA_ALLOW_SIGNUP:-false}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
     depends_on:
       prometheus:
         condition: service_healthy
@@ -53,10 +64,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Loki Log Aggregation (Optional - controlled by LOKI_ENABLED)
+  loki:
+    image: grafana/loki:3.5.7
+    container_name: loki
     restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    environment:
+      - LOKI_CONFIG_FILE=/etc/loki/local-config.yaml
+    networks:
+      - observability
+    depends_on:
+      - grafana
 
 volumes:
   prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
     driver: local
 
 networks:

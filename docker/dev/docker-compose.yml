@@ -1,5 +1,7 @@
+version: '3.8'
+
 services:
-  # Next.js Application
+  # Next.js Application - Development
   app:
     build:
       context: ../../
@@ -8,16 +10,20 @@ services:
     restart: unless-stopped
     env_file:
       - ../../.env
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
     volumes:
-      - ../../:/app
+      - ../../:/app:cached
       - /app/node_modules
       - /app/.next
     ports:
       - "3000:3000"
     stdin_open: true
     tty: true
+    command: ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
 
-  # Worker Service
+  # Worker Service - Development
   worker:
     build:
       context: ../../
@@ -26,11 +32,15 @@ services:
     restart: unless-stopped
     env_file:
       - ../../.env
+    environment:
+      - NODE_ENV=development
     volumes:
       - ../../lib:/app/lib
       - ../../tsconfig.json:/app/tsconfig.json
     depends_on:
       - app
+    stdin_open: true
+    tty: true
     healthcheck:
       test: ["CMD", "npx", "tsx", "lib/queue/worker-service.ts", "health"]
       interval: 30s

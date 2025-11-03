@@ -199,7 +199,7 @@ resource "aws_cloudwatch_log_group" "grafana" {
 
 resource "aws_iam_role_policy" "prometheus_efs" {
   name = "${var.project_name}-${var.environment}-prometheus-efs"
-  role = var.ecs_task_role_arn
+  role = split("/", var.ecs_task_role_arn)[1]
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -481,7 +481,7 @@ resource "aws_lb_listener" "prometheus" {
 
 resource "aws_lb_listener" "grafana" {
   load_balancer_arn = var.observability_alb_arn
-  port              = 80
+  port              = 3000
   protocol          = "HTTP"
 
   default_action {
