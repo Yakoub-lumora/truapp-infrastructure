@@ -102,6 +102,7 @@ resource "aws_ecs_task_definition" "workers" {
       image     = "${aws_ecr_repository.workers.repository_url}:${var.worker_image_tag}"
       essential = true
 
+      # Basic environment variables (non-sensitive)
       environment = [
         {
           name  = "NODE_ENV"
@@ -120,6 +121,18 @@ resource "aws_ecs_task_definition" "workers" {
           value = var.environment
         }
       ]
+
+      # Dynamically load all sensitive variables from SSM Parameter Store
+      secrets = local.ssm_secrets
+
+      # Health check configuration matching docker-compose.yml
+      healthCheck = {
+        command     = ["CMD-SHELL", "npx tsx lib/queue/worker-service.ts health || exit 1"]
+        interval    = 30
+        timeout     = 15
+        retries     = 3
+        startPeriod = 60
+      }
 
       logConfiguration = {
         logDriver = "awslogs"

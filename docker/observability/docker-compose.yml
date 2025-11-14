@@ -78,10 +78,16 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
     environment:
       - LOKI_CONFIG_FILE=/etc/loki/local-config.yaml
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - observability
     depends_on:
       - grafana
+
 
 volumes:
   prometheus_data:
