@@ -1,0 +1,70 @@
+name: Railway Worker Deployment
+
+on:
+  push:
+    branches:
+      - main-worker
+
+env:
+  NODE_VERSION: '20.10.0'
+
+jobs:
+  deploy-railway:
+    name: Deploy Worker to Railway
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Set Railway Environment Variables
+        run: bash .github/scripts/set-deployment-env.sh railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_NAME: ${{ vars.RAILWAY_SERVICE_NAME }}
+          NODE_ENV: ${{ vars.NODE_ENV }}
+          NEXT_TELEMETRY_DISABLED: ${{ vars.NEXT_TELEMETRY_DISABLED }}
+          ENABLE_CONSOLE_LOGS: true
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          ELASTICACHE_REDIS_HOST: ${{ vars.ELASTICACHE_REDIS_HOST }}
+          ELASTICACHE_REDIS_PORT: ${{ vars.ELASTICACHE_REDIS_PORT }}
+          ELASTICACHE_REDIS_PASSWORD: ${{ secrets.ELASTICACHE_REDIS_PASSWORD }}
+          ELASTICACHE_REDIS_TLS: ${{ vars.ELASTICACHE_REDIS_TLS }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
+          S3_PUBLIC_URL: ${{ vars.S3_PUBLIC_URL }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+
+      - name: Deploy Worker to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_NAME: ${{ vars.RAILWAY_SERVICE_NAME || 'worker' }}
+        run: |
+          railway up \
+            --service $RAILWAY_SERVICE_NAME \
+            --detach
+
+      - name: Verify Railway Deployment
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Waiting for deployment to stabilize..."
+          sleep 30
+          railway status
+
+      - name: Deployment Summary
+        run: |
+          echo "### ✅ Railway Worker Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** Worker" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

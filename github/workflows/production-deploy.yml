@@ -1,0 +1,76 @@
+name: Production Deployment
+
+on:
+  workflow_run:
+    workflows: ["PR Checks"]
+    types:
+      - completed
+    branches:
+      - main
+
+env:
+  NODE_VERSION: '20.10.0'
+
+jobs:
+  deploy-vercel:
+    name: Deploy Next.js to Vercel
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Link Vercel Project
+        run: |
+          mkdir -p .vercel
+          echo '{"orgId":"${{ secrets.VERCEL_ORG_ID }}","projectId":"${{ secrets.VERCEL_PROJECT_ID }}"}' > .vercel/project.json
+
+      - name: Set Vercel Environment Variables
+        run: bash .github/scripts/set-deployment-env.sh vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          NODE_ENV: ${{ vars.NODE_ENV }}
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          NEXT_TELEMETRY_DISABLED: ${{ vars.NEXT_TELEMETRY_DISABLED }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          ELASTICACHE_REDIS_HOST: ${{ vars.ELASTICACHE_REDIS_HOST }}
+          ELASTICACHE_REDIS_PORT: ${{ vars.ELASTICACHE_REDIS_PORT }}
+          ELASTICACHE_REDIS_PASSWORD: ${{ secrets.ELASTICACHE_REDIS_PASSWORD }}
+          ELASTICACHE_REDIS_TLS: ${{ vars.ELASTICACHE_REDIS_TLS }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
+          S3_PUBLIC_URL: ${{ vars.S3_PUBLIC_URL }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          DEPLOYMENT_URL=$(vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+          echo "Deployed to: $DEPLOYMENT_URL"
+
+      - name: Deployment Summary
+        run: |
+          echo "### ✅ Vercel Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** ${{ steps.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
